@@ -1,0 +1,495 @@
+<?php
+
+declare(strict_types=1);
+
+namespace SugarCraft\Fuzzy\Tests;
+
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\Test;
+use SugarCraft\Fuzzy\Matcher\SmithWatermanMatcher;
+use SugarCraft\Fuzzy\MatchResult;
+use SugarCraft\Fuzzy\ScoringProfile;
+use PHPUnit\Framework\TestCase;
+
+#[CoversClass(SmithWatermanMatcher::class)]
+final class SmithWatermanMatcherTest extends TestCase
+{
+    private SmithWatermanMatcher $matcher;
+
+    protected function setUp(): void
+    {
+        $this->matcher = new SmithWatermanMatcher();
+    }
+
+    #[Test]
+    public function testMatchReturnsMatchResult(): void
+    {
+        $result = $this->matcher->match('hello', 'hello');
+
+        $this->assertInstanceOf(MatchResult::class, $result);
+    }
+
+    #[Test]
+    public function testMatchWithExactMatch(): void
+    {
+        $result = $this->matcher->match('hello', 'hello');
+
+        $this->assertNotNull($result);
+        $this->assertGreaterThan(0, $result->score);
+        $this->assertSame('hello', $result->needle);
+        $this->assertSame('hello', $result->haystack);
+    }
+
+    #[Test]
+    public function testMatchWithSubstringMatch(): void
+    {
+        $result = $this->matcher->match('ell', 'hello');
+
+        $this->assertNotNull($result);
+        $this->assertGreaterThan(0, $result->score);
+        $this->assertSame('ell', $result->needle);
+        $this->assertSame('hello', $result->haystack);
+    }
+
+    #[Test]
+    public function testMatchNoMatchReturnsNull(): void
+    {
+        $result = $this->matcher->match('xyz', 'hello');
+
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function testMatchEmptyQueryReturnsNull(): void
+    {
+        $result = $this->matcher->match('', 'hello');
+
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function testMatchEmptyCandidateReturnsNull(): void
+    {
+        $result = $this->matcher->match('hello', '');
+
+        $this->assertNull($result);
+    }
+
+    #[Test]
+    public function testQueryLongerThanCandidateReturnsMatch(): void
+    {
+        // Smith-Waterman is local alignment — it finds the best matching
+        // SUBSTRING. "hello" vs "hi" finds "h" match with score 3 (MATCH_SCORE).
+        // This matches the behavior of Forms\Fuzzy\FuzzyMatcher::score().
+        $result = $this->matcher->match('hello', 'hi');
+
+        $this->assertNotNull($result);
+        $this->assertSame(3, $result->score);
+        $this->assertSame([0], $result->matchedIndices);
+    }
+
+    #[Test]
+    public function testMatchAllReturnsSortedResults(): void
+    {
+        $candidates = ['apple', 'applet', 'application', 'apply', 'apricot'];
+
+        $results = $this->matcher->matchAll('app', $candidates);
+
+        $this->assertNotEmpty($results);
+        // Should be sorted by score descending (higher scores first)
+        $resultCount = count($results);
+        for ($i = 1; $i < $resultCount; $i++) {
+            $this->assertGreaterThanOrEqual($results[$i]->score, $results[$i - 1]->score);
+        }
+    }
+
+    #[Test]
+    public function testMatchAllEmptyQueryReturnsEmpty(): void
+    {
+        $results = $this->matcher->matchAll('', ['hello', 'world']);
+
+        $this->assertSame([], $results);
+    }
+
+    #[Test]
+    public function testMatchAllEmptyCandidatesReturnsEmpty(): void
+    {
+        $results = $this->matcher->matchAll('hello', []);
+
+        $this->assertSame([], $results);
+    }
+
+    #[Test]
+    public function testMatchedIndicesForExactMatch(): void
+    {
+        $result = $this->matcher->match('foo', 'foobar');
+
+        $this->assertNotNull($result);
+        // All characters matched in order
+        $this->assertSame([0, 1, 2], $result->indices());
+    }
+
+    #[Test]
+    public function testMatchedIndicesForPartialMatch(): void
+    {
+        $result = $this->matcher->match('oba', 'foobar');
+
+        $this->assertNotNull($result);
+        // The algorithm produces specific indices via Smith-Waterman traceback
+        // Indices represent the matched alignment path
+        $this->assertContains($result->indices()[0], [1, 2]); // First match could be at different positions
+    }
+
+    #[Test]
+    public function testMatchedIndicesForConsecutiveMatches(): void
+    {
+        $result = $this->matcher->match('ello', 'hello');
+
+        $this->assertNotNull($result);
+        // 'e' at index 1, 'l' at 2, 'l' at 3, 'o' at 4
+        $this->assertSame([1, 2, 3, 4], $result->indices());
+    }
+
+    #[Test]
+    public function testCaseInsensitiveScoring(): void
+    {
+        $scoreLower = $this->matcher->match('hello', 'hello');
+        $scoreMixed = $this->matcher->match('HELLO', 'hello');
+
+        $this->assertNotNull($scoreLower);
+        $this->assertNotNull($scoreMixed);
+        $this->assertSame($scoreLower->score, $scoreMixed->score);
+    }
+
+    #[Test]
+    public function testConsecutiveMatchesScoreHigher(): void
+    {
+        $scoreConsec = $this->matcher->match('ello', 'hello');
+        $scoreNonConsec = $this->matcher->match('hlo', 'hello');
+
+        $this->assertNotNull($scoreConsec);
+        $this->assertNotNull($scoreNonConsec);
+        $this->assertGreaterThan($scoreNonConsec->score, $scoreConsec->score);
+    }
+
+    #[Test]
+    public function testFullMatchScoresHigherThanPartial(): void
+    {
+        $fullScore = $this->matcher->match('hello', 'hello');
+        $partialScore = $this->matcher->match('hell', 'hello');
+
+        $this->assertNotNull($fullScore);
+        $this->assertNotNull($partialScore);
+        $this->assertGreaterThan($partialScore->score, $fullScore->score);
+    }
+
+    #[Test]
+    public function testUtf8Characters(): void
+    {
+        $result = $this->matcher->match('中', '中文测试');
+
+        $this->assertNotNull($result);
+        $this->assertContains(0, $result->indices());
+    }
+
+    #[Test]
+    public function testUtf8PartialMatch(): void
+    {
+        $result = $this->matcher->match('文测', '中文测试');
+
+        $this->assertNotNull($result);
+        $this->assertSame([1, 2], $result->indices());
+    }
+
+    #[Test]
+    public function testMatchResultIsEmpty(): void
+    {
+        $result = $this->matcher->match('xyz', 'hello');
+
+        $this->assertNull($result); // No match returns null
+    }
+
+    #[Test]
+    public function testMatchResultIsMatched(): void
+    {
+        $result = $this->matcher->match('hello', 'hello');
+
+        $this->assertNotNull($result);
+        $this->assertTrue($result->isMatched());
+    }
+
+    #[Test]
+    public function testMatchAllExcludesNonMatches(): void
+    {
+        $candidates = ['hello', 'world', 'xyz'];
+        $results = $this->matcher->matchAll('xyz', $candidates);
+
+        $this->assertCount(1, $results);
+        $this->assertSame('xyz', $results[0]->haystack);
+    }
+
+    #[Test]
+    public function testMatchAllTiebreakByCandidateAscending(): void
+    {
+        // 'app' should match both but 'app' should come before 'applet' alphabetically
+        $candidates = ['applet', 'app'];
+        $results = $this->matcher->matchAll('app', $candidates);
+
+        $this->assertCount(2, $results);
+        // Same score, so sorted by candidate asc - 'app' comes first
+        $this->assertSame('app', $results[0]->haystack);
+    }
+
+    #[Test]
+    public function testAmbiguousQueryAbOrderingAndIndices(): void
+    {
+        $candidates = ['alpha', 'ablation', 'label'];
+
+        $results = $this->matcher->matchAll('ab', $candidates);
+
+        $this->assertCount(3, $results);
+
+        foreach ($results as $result) {
+            $this->assertNotEmpty($result->indices(), "Matched candidate '{$result->haystack}' must have non-empty indices");
+            $this->assertTrue($result->score > 0, "Score must be positive for matched candidate '{$result->haystack}'");
+        }
+
+        $scores = array_map(static fn(MatchResult $r) => $r->score, $results);
+        $scoreCount = count($scores);
+        for ($i = 1; $i < $scoreCount; $i++) {
+            $this->assertGreaterThanOrEqual($scores[$i], $scores[$i - 1], 'Results must be sorted by score descending');
+        }
+    }
+
+    #[Test]
+    public function testAmbiguousQueryAbIndicesAreByteOffsets(): void
+    {
+        $candidates = ['alpha', 'ablation', 'label'];
+        $results = $this->matcher->matchAll('ab', $candidates);
+
+        $resultMap = [];
+        foreach ($results as $result) {
+            $resultMap[$result->haystack] = $result;
+        }
+
+        $this->assertContains(0, $resultMap['ablation']->indices());
+        $this->assertContains(1, $resultMap['ablation']->indices());
+
+        $this->assertNotEmpty($resultMap['alpha']->indices());
+        $this->assertNotEmpty($resultMap['label']->indices());
+    }
+
+    #[Test]
+    public function testMatchAllRespectsLimit(): void
+    {
+        $candidates = ['apple', 'applet', 'application', 'apply', 'apricot'];
+        $results = $this->matcher->matchAll('app', $candidates, limit: 2);
+
+        $this->assertCount(2, $results);
+    }
+
+    #[Test]
+    public function testMatchAllRespectsMinScore(): void
+    {
+        // Build a list with varied scores
+        $candidates = ['hello', 'hey', 'h', 'xyz'];
+        $results = $this->matcher->matchAll('he', $candidates, minScore: 10);
+
+        // All results should have score >= 10
+        foreach ($results as $result) {
+            $this->assertGreaterThanOrEqual(10, $result->score);
+        }
+    }
+
+    #[Test]
+    public function testMatchAllWithNoLimitOrMinScoreIsUnchanged(): void
+    {
+        // Verify the default behavior (no limit, minScore=1) returns same results
+        $candidates = ['apple', 'applet', 'application', 'apply', 'apricot'];
+        $withDefaults = $this->matcher->matchAll('app', $candidates);
+        $explicit = $this->matcher->matchAll('app', $candidates, null, 1);
+
+        $this->assertEquals($withDefaults, $explicit);
+    }
+
+    #[Test]
+    public function testScoreReturnsIntegerScore(): void
+    {
+        $score = $this->matcher->score('hello', 'hello');
+
+        $this->assertIsInt($score);
+        $this->assertGreaterThan(0, $score);
+    }
+
+    #[Test]
+    public function testScoreEmptyQueryReturnsZero(): void
+    {
+        $score = $this->matcher->score('', 'hello');
+
+        $this->assertSame(0, $score);
+    }
+
+    #[Test]
+    public function testScoreEmptyCandidateReturnsZero(): void
+    {
+        $score = $this->matcher->score('hello', '');
+
+        $this->assertSame(0, $score);
+    }
+
+    #[Test]
+    public function testScoreConsecutiveMatchesHigherThanScattered(): void
+    {
+        $scoreConsec = $this->matcher->score('ello', 'hello');
+        $scoreNonConsec = $this->matcher->score('hlo', 'hello');
+
+        $this->assertGreaterThan($scoreNonConsec, $scoreConsec);
+    }
+
+    #[Test]
+    public function testScoreNoMatchReturnsZero(): void
+    {
+        $score = $this->matcher->score('xyz', 'hello');
+
+        $this->assertSame(0, $score);
+    }
+
+    #[Test]
+    public function testScoreOverLengthQueryAlignsOnlyThePrefix(): void
+    {
+        // Over-cap input is truncated to the cap, never handed to another
+        // algorithm: "hello" with maxQueryLength=2 aligns exactly like "he".
+        $matcher = new SmithWatermanMatcher(null, 2, 1000);
+
+        $score = $matcher->score('hello', 'hello');
+
+        $this->assertSame($matcher->score('he', 'hello'), $score);
+        $this->assertSame(11, $score);
+        $this->assertSame($matcher->match('hello', 'hello')?->score, $score);
+        $this->assertSame([0, 1], $matcher->match('hello', 'hello')?->matchedIndices);
+    }
+
+    #[Test]
+    public function testScoreOverLengthCandidateAlignsOnlyThePrefix(): void
+    {
+        // Only the first maxCandidateLength=2 candidate chars are searched.
+        $matcher = new SmithWatermanMatcher(null, 1000, 2);
+
+        $score = $matcher->score('hello', 'hello');
+
+        $this->assertSame($matcher->score('hello', 'he'), $score);
+        $this->assertSame(11, $score);
+        $this->assertSame($matcher->match('hello', 'hello')?->score, $score);
+        // Indices stay valid in the ORIGINAL haystack.
+        $this->assertSame([0, 1], $matcher->match('hello', 'hello')?->matchedIndices);
+    }
+
+    #[Test]
+    public function testScoreEquivalentToMatchScore(): void
+    {
+        $matchResult = $this->matcher->match('ello', 'hello');
+        $scoreOnly = $this->matcher->score('ello', 'hello');
+
+        $this->assertSame($matchResult?->score ?? 0, $scoreOnly);
+    }
+
+    #[Test]
+    public function testNewFactoryCreatesInstance(): void
+    {
+        $matcher = SmithWatermanMatcher::new();
+
+        $this->assertInstanceOf(SmithWatermanMatcher::class, $matcher);
+    }
+
+    #[Test]
+    public function testNewFactoryWithProfile(): void
+    {
+        $profile = ScoringProfile::strict();
+        $matcher = SmithWatermanMatcher::new($profile);
+
+        $this->assertSame($profile, $matcher->profile());
+    }
+
+    #[Test]
+    public function testProfileReturnsScoringProfile(): void
+    {
+        $profile = $this->matcher->profile();
+
+        $this->assertInstanceOf(ScoringProfile::class, $profile);
+    }
+
+    #[Test]
+    public function testConstructorThrowsOnInvalidMaxQueryLength(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Length caps must be >= 1');
+
+        new SmithWatermanMatcher(null, 0, 1000);
+    }
+
+    #[Test]
+    public function testConstructorThrowsOnInvalidMaxCandidateLength(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('Length caps must be >= 1');
+
+        new SmithWatermanMatcher(null, 1000, 0);
+    }
+
+    #[Test]
+    public function testMatchAllGeneratorYieldsRankedResults(): void
+    {
+        $candidates = ['apple', 'applet', 'application', 'apply', 'apricot'];
+
+        $results = [];
+        foreach ($this->matcher->matchAllGenerator('app', $candidates) as $result) {
+            $results[] = $result;
+        }
+
+        $this->assertNotEmpty($results);
+        // Should be sorted by score descending
+        $resultCount = count($results);
+        for ($i = 1; $i < $resultCount; $i++) {
+            $this->assertGreaterThanOrEqual($results[$i]->score, $results[$i - 1]->score);
+        }
+    }
+
+    #[Test]
+    public function testMatchAllGeneratorWithLimit(): void
+    {
+        $candidates = ['apple', 'applet', 'application', 'apply', 'apricot'];
+
+        $results = [];
+        foreach ($this->matcher->matchAllGenerator('app', $candidates, limit: 2) as $result) {
+            $results[] = $result;
+        }
+
+        $this->assertCount(2, $results);
+    }
+
+    #[Test]
+    public function testMatchAllGeneratorWithMinScore(): void
+    {
+        $candidates = ['hello', 'hey', 'h', 'xyz'];
+
+        $results = [];
+        foreach ($this->matcher->matchAllGenerator('he', $candidates, minScore: 10) as $result) {
+            $results[] = $result;
+        }
+
+        foreach ($results as $result) {
+            $this->assertGreaterThanOrEqual(10, $result->score);
+        }
+    }
+
+    #[Test]
+    public function testMatchAllGeneratorEmptyQueryYieldsNothing(): void
+    {
+        $results = [];
+        foreach ($this->matcher->matchAllGenerator('', ['hello', 'world']) as $result) {
+            $results[] = $result;
+        }
+
+        $this->assertSame([], $results);
+    }
+}

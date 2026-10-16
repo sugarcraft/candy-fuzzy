@@ -1,0 +1,185 @@
+<?php
+
+declare(strict_types=1);
+
+namespace SugarCraft\Fuzzy\Tests;
+
+use PHPUnit\Framework\Attributes\CoversClass;
+use PHPUnit\Framework\Attributes\Test;
+use SugarCraft\Fuzzy\Highlighter;
+use SugarCraft\Fuzzy\MatchResult;
+use PHPUnit\Framework\TestCase;
+
+#[CoversClass(Highlighter::class)]
+final class HighlighterTest extends TestCase
+{
+    private Highlighter $highlighter;
+
+    protected function setUp(): void
+    {
+        $this->highlighter = new Highlighter();
+    }
+
+    #[Test]
+    public function testHighlightSingleMatch(): void
+    {
+        $result = new MatchResult('foo', 'foobar', 10, [0, 1, 2]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "<b>$m</b>");
+
+        $this->assertSame('<b>foo</b>bar', $output);
+    }
+
+    #[Test]
+    public function testHighlightPartialMatch(): void
+    {
+        // Indices [1, 3, 4] with consecutive 3,4 means two runs: [1,1]='o' and [3,4]='ba'
+        $result = new MatchResult('oba', 'foobar', 10, [1, 3, 4]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('f[o]o[ba]r', $output);
+    }
+
+    #[Test]
+    public function testHighlightEmptyIndices(): void
+    {
+        $result = new MatchResult('xyz', 'foobar', 0, []);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "<b>$m</b>");
+
+        $this->assertSame('foobar', $output);
+    }
+
+    #[Test]
+    public function testHighlightConsecutiveRun(): void
+    {
+        $result = new MatchResult('ello', 'hello', 15, [1, 2, 3, 4]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "*$m*");
+
+        $this->assertSame('h*ello*', $output);
+    }
+
+    #[Test]
+    public function testHighlightMultipleRuns(): void
+    {
+        // Indices [0, 4] are not consecutive, so two separate runs
+        $result = new MatchResult('ab', 'aXXbYY', 10, [0, 4]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('[a]XXb[Y]Y', $output);
+    }
+
+    #[Test]
+    public function testHighlightPreservesUnmatchedContent(): void
+    {
+        $result = new MatchResult('bc', 'abcdef', 10, [1, 2]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "<mark>$m</mark>");
+
+        $this->assertSame('a<mark>bc</mark>def', $output);
+    }
+
+    #[Test]
+    public function testHighlightWithEmptyStyler(): void
+    {
+        $result = new MatchResult('foo', 'foobar', 10, [0, 1, 2]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => $m);
+
+        $this->assertSame('foobar', $output);
+    }
+
+    #[Test]
+    public function testHighlightUtf8(): void
+    {
+        $result = new MatchResult('中文', '中文字符', 10, [0]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "{$m}");
+
+        $this->assertSame('中文字符', $output);
+    }
+
+    #[Test]
+    public function testHighlightUtf8Partial(): void
+    {
+        $result = new MatchResult('文字', '中文字符', 10, [1, 2]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('中[文字]符', $output);
+    }
+
+    #[Test]
+    public function testUnsortedDuplicateIndicesAreNormalized(): void
+    {
+        // MatchResult is publicly constructible — external callers may pass
+        // unsorted or duplicate indices; Highlighter must normalize them.
+        // After normalization [2,0,1,1] → [0,1,2] (sorted unique), all consecutive,
+        // forming a single run [0,2] — the entire string is styled.
+        $result = new MatchResult('ab', 'abc', 10, [2, 0, 1, 1]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        // Same output as sorted unique [0, 1, 2]
+        $this->assertSame('[abc]', $output);
+    }
+
+    #[Test]
+    public function testPastEndIndexIsDropped(): void
+    {
+        // Index 5 is past the end of 'abc' (len 3) — must be filtered, not
+        // slice an empty run that would corrupt output (regression: '[a]bc[]').
+        $result = new MatchResult('x', 'abc', 5, [0, 5]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('[a]bc', $output);
+    }
+
+    #[Test]
+    public function testAllIndicesOutOfRangeReturnsHaystackUnchanged(): void
+    {
+        $result = new MatchResult('x', 'abc', 5, [10, 11]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('abc', $output);
+    }
+
+    #[Test]
+    public function testBoundaryPastEndIndexIsDropped(): void
+    {
+        // Index 3 is exactly one past the last valid index (2) of 'abc'.
+        $result = new MatchResult('x', 'abc', 5, [1, 2, 3]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('a[bc]', $output);
+    }
+
+    #[Test]
+    public function testNegativeIndexIsDropped(): void
+    {
+        // Regression: a negative index previously made mb_substr duplicate
+        // content ('ab[c]bc'). It must be filtered out entirely.
+        $result = new MatchResult('x', 'abc', 5, [-1, 0]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('[a]bc', $output);
+    }
+
+    #[Test]
+    public function testMixedOutOfRangeIndicesAreNormalized(): void
+    {
+        // -1 and 5 dropped; {2,0,1} sorted-unique → single run [0,2].
+        $result = new MatchResult('abc', 'abc', 10, [2, 0, 5, 1, -1]);
+
+        $output = $this->highlighter->highlight($result, fn($m) => "[$m]");
+
+        $this->assertSame('[abc]', $output);
+    }
+}
