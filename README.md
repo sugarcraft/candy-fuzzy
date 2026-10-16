@@ -12,10 +12,10 @@ composer require sugarcraft/sugar-fuzzy
 
 ## Role
 
-Extracts the canonical Smith-Waterman fuzzy matcher from `candy-forms` and adds the key feature that was previously impossible: **ranked matches WITH scored matched character indices**, enabling UI filter highlighting.
+Extracts the canonical Smith-Waterman fuzzy matcher from `sugar-forms` and adds the key feature that was previously impossible: **ranked matches WITH scored matched character indices**, enabling UI filter highlighting.
 
 Provides two algorithms:
-- **SmithWatermanMatcher** — Smith-Waterman local alignment with adjacency bonus. Bit-equivalent to the original `candy-forms` implementation.
+- **SmithWatermanMatcher** — Smith-Waterman local alignment with adjacency bonus. Bit-equivalent to the original `sugar-forms` implementation.
 - **SahilmMatcher** — Implements the `sahilm/fuzzy` scoring algorithm. Includes separator bonus, camelCase bonus, exact-prefix bonus.
 
 ## Quickstart
@@ -194,13 +194,13 @@ function filter(FuzzyMatcher $matcher, string $query, array $candidates): array
 ecosystem. Consumer migration is **complete** — no duplicate scoring core
 remains outside this library:
 
-- **`candy-forms`** — `SugarCraft\Forms\Fuzzy\FuzzyMatcher` is a
+- **`sugar-forms`** — `SugarCraft\Forms\Fuzzy\FuzzyMatcher` is a
   `@deprecated` shim whose former hand-rolled DP core was removed; every score
   now delegates to `SmithWatermanMatcher` with the default `ScoringProfile`
   (bit-equivalent to the historical constants).
-- **`candy-lister`** — `SugarCraft\Lister\ScoringProfile` is a `class_alias` to
-  this library's `ScoringProfile`, and `SugarCraft\Lister\FuzzyMatch` is a thin
-  delegating shim over `SmithWatermanMatcher` (keeping candy-lister's own
+- **`sugar-treelist`** — `SugarCraft\TreeList\ScoringProfile` is a `class_alias` to
+  this library's `ScoringProfile`, and `SugarCraft\TreeList\FuzzyMatch` is a thin
+  delegating shim over `SmithWatermanMatcher` (keeping sugar-treelist's own
   `\Stringable`-item contract and input-order tiebreak).
 
 New code should depend on `SugarCraft\Fuzzy\*` directly.
